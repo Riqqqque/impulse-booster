@@ -1,9 +1,9 @@
-## Interface: 20400
+## Interface: 11200
 ## Title: I|cFFFF8080mpulse|rBooster
-## Notes: Improves your UI loading time and game performance in some cases. Compatible with WoW 1.9.0 and higher.
+## Notes: Improves UI loading time on pre-WotLK clients with Turtle-safe defaults.
 ## X-Category: Interface Enhancements
-## X-Date: 2016-07-16
-## X-Website: https://github.com/Warlockbugs/impulse-booster
-## Version: 3.1
+## X-Date: 2026-03-11
+## X-Website: https://github.com/Riqqqque/impulse-booster
+## Version: 3.1.1
 
 ImpulseBooster.lua

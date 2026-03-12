@@ -23,9 +23,14 @@ Cut features in 3.0:
 * Lua garbage collection suppression while loading/reloading UI. This feature was removed due to negligible effect and being potentially unsafe for taints. This feature can be reintroduced on demand.
 
 INSTALLATION:
-* Windows users: Download and unzip regular edition package into "Interface\AddOns\" subfolder of your The Burning Crusade client.
-* Linux (WINE) users: Download and unzip WINE edition package into "Data/" subfolder of your The Burning Crusade client.
+* Windows users: Download and unzip the addon folder into your client's "Interface\AddOns\" directory.
+* Linux (WINE) users: Use the same addon folder unless your client still requires a custom load-order workaround.
 
 IMPORTANT NOTES:
 
 Its recommended for Linux users to use their respective dedicated edition, because this WINE bug doesn't allow this addon to be loaded first: https://bugs.winehq.org/show_bug.cgi?id=34122 
+
+TURTLE WOW NOTES:
+* This package targets Turtle WoW's vanilla-style addon interface (11200).
+* IBSync and the extra Video Options checkboxes only work on 2.2+ clients, so they are not active on Turtle.
+* Early graphics restart is skipped by default on Turtle-style clients to avoid white UI elements during loading. Legacy behavior can be restored with "/console ibAllowUnsafeRestart 1".

@@ -38,14 +38,19 @@ local RestartGx = RestartGx
 local SetCVar = SetCVar
 local function GetAvailableRefreshRates(mode, modes) local r = {}; for i,m in ipairs(modes) do if m == mode then for i,rate in ipairs({GetRefreshRates(i)}) do r[rate] = i; end; end; end; return r; end
 local function GetCVarNum(cvar)	return tonumber(GetCVar(cvar)); end -- Function: Get CVar's numeric value (or nil)
-local function GetMaxFPS() return GetCVarNum("maxFPS") or 0; end
+local function GetRawMaxFPS() return GetCVarNum("maxFPS"); end
+local function GetMaxFPS() return GetRawMaxFPS() or 0; end
+local function GetEffectiveMaxFPS()
+	local maxFPS = GetMaxFPS()
+	return ((maxFPS < 0 and GetRefreshRate()) or maxFPS)
+end
 local function GetMaxFPSBG() return GetCVarNum("maxFPSBk") or 0; end
 local function GetResolution() return GetCVar("gxResolution"); end
 local function GetRefreshRate() return GetCVarNum("gxRefresh") or 0; end
 local function GetVSync() return (GetCVarNum("gxVSync") or 0) > 0; end
 local function UseCVars(cvars) if istable(cvars) then for k,v in pairs(cvars) do if isstr(v) then RegisterCVar(v, nil); end; end; end; end -- Registering non-existent CVars on old clients will suppress errors
 --
-UseCVars({"coresDetected", "gxRefresh", "gxResolution", "gxVSync", "maxFPS", "maxFPSBk", "scriptMemory", "timingMethod", "timingTestError", "processAffinityMask"})
+UseCVars({"coresDetected", "gxRefresh", "gxResolution", "gxVSync", "maxFPS", "maxFPSBk", "scriptMemory", "timingMethod", "timingTestError", "processAffinityMask", "ibAllowUnsafeRestart", "ibMaxFPSRestore"})
 local ADDONS_NUM = GetNumAddOns()
 local ADDONS_NUM_ENABLED = 0
 local ADDONS_NUM_BLOATED_RATIO = 0
@@ -54,15 +59,21 @@ local ADDONS_MAX_MEM = GetCVarNum("scriptMemory") or 0
 --
 local DISPLAY_RESOLUTIONS = {GetScreenResolutions()}
 local DISPLAY_LAST_CHECK = 0
-local DISPLAY_RESOLUTION = GetResolution()
-local DISPLAY_RATES = GetAvailableRefreshRates(DISPLAY_RESOLUTION, DISPLAY_RESOLUTIONS)
-local DISPLAY_RATE = GetRefreshRate()
-local DISPLAY_VSYNC = GetVSync()
-local DISPLAY_FPS_LIMITER = (WOW >= 20200 and GetCVarNum("maxFPS") ~= nil and GetCVarNum("maxFPSBk") ~= nil)
-local DISPLAY_MAX_FPS = (GetMaxFPS() < 0 and DISPLAY_RATE) or GetMaxFPS()
-local DISPLAY_MAX_FPS_BG = GetMaxFPSBG()
-local DISPLAY_IBSYNC = DISPLAY_FPS_LIMITER and not DISPLAY_VSYNC and DISPLAY_RATES[DISPLAY_MAX_FPS] ~= nil
+local DISPLAY_RESOLUTION = nil
+local DISPLAY_RATES = {}
+local DISPLAY_RATE = 0
+local DISPLAY_VSYNC = false
+local DISPLAY_MAX_FPS_SUPPORTED = (GetRawMaxFPS() ~= nil)
+local DISPLAY_FPS_LIMITER = (WOW >= 20200 and DISPLAY_MAX_FPS_SUPPORTED and GetCVarNum("maxFPSBk") ~= nil)
+local DISPLAY_MAX_FPS = 0
+local DISPLAY_MAX_FPS_BG = 0
+local DISPLAY_IBSYNC = false
 local DISPLAY_IBSYNC_BURNOUT = (GetMaxFPS() < 0)
+local DISPLAY_RESTART_PENDING = false
+local DISPLAY_RESTART_SKIPPED = false
+local DISPLAY_LOADING_MAX_FPS = false
+local DISPLAY_LOADING_MAX_FPS_PREV = nil
+local DISPLAY_TURTLE_SAFE_MODE = (WOW ~= nil and WOW >= 11700 and WOW < 20000 and (GetCVarNum("ibAllowUnsafeRestart") or 0) == 0)
 --
 local CPU_NUM_THREADS = GetCVarNum("coresDetected") or 0
 local CPU_AFFINITY = GetCVarNum("processAffinityMask") or 0
@@ -73,6 +84,16 @@ local CPU_NEW_TIMING = false
 --
 local TIME_LOADING_START = 0
 local TIME_LOADING_END = 0
+--
+local function RefreshDisplayState()
+	DISPLAY_RESOLUTION = GetResolution()
+	DISPLAY_RATES = GetAvailableRefreshRates(DISPLAY_RESOLUTION, DISPLAY_RESOLUTIONS)
+	DISPLAY_RATE = GetRefreshRate()
+	DISPLAY_VSYNC = GetVSync()
+	DISPLAY_MAX_FPS = GetEffectiveMaxFPS()
+	DISPLAY_MAX_FPS_BG = GetMaxFPSBG()
+	DISPLAY_IBSYNC = DISPLAY_FPS_LIMITER and not DISPLAY_VSYNC and DISPLAY_RATES[DISPLAY_MAX_FPS] ~= nil
+end
 --
 if ADDONS_NUM > 0 then -- Enabled and bloated addons detaction: 
 	local bloat, loading = 0, 0
@@ -93,7 +114,7 @@ if ADDONS_NUM > 0 then -- Enabled and bloated addons detaction:
 		end
 	end
 	ADDONS_NUM_ENABLED = loading
-	ADDONS_NUM_BLOATED_RATIO = (bloat / loading)
+	ADDONS_NUM_BLOATED_RATIO = ((loading > 0 and (bloat / loading)) or 0)
 end
 --
 local function CreateProcessAffinityMask(numCores, advised)
@@ -102,63 +123,104 @@ local function CreateProcessAffinityMask(numCores, advised)
 	return (advised and band(mask, bnot(1))) or mask
 end
 --
-local function SetMaxFPS(fps) return SetCVar("maxFPS", (fps or ((GetMaxFPS() < MAX_WOW_FRAMERATE and MAX_WOW_FRAMERATE) or DISPLAY_MAX_FPS))); end
+local function SetMaxFPS(fps)
+	if not DISPLAY_MAX_FPS_SUPPORTED then return; end
+	return SetCVar("maxFPS", ((fps ~= nil) and fps) or ((GetMaxFPS() < MAX_WOW_FRAMERATE and MAX_WOW_FRAMERATE) or DISPLAY_MAX_FPS))
+end
+--
+local function ToggleLoadingMaxFPS(boost)
+	if not DISPLAY_MAX_FPS_SUPPORTED then return; end
+	if boost then
+		if DISPLAY_LOADING_MAX_FPS then return; end
+		DISPLAY_LOADING_MAX_FPS = true
+		DISPLAY_LOADING_MAX_FPS_PREV = GetRawMaxFPS()
+		return SetMaxFPS()
+	end
+	if not DISPLAY_LOADING_MAX_FPS then return; end
+	DISPLAY_LOADING_MAX_FPS = false
+	if DISPLAY_LOADING_MAX_FPS_PREV ~= nil then
+		SetCVar("maxFPS", DISPLAY_LOADING_MAX_FPS_PREV)
+	end
+	DISPLAY_LOADING_MAX_FPS_PREV = nil
+end
+--
+local function ShouldBoostLoading()
+	return (ADDONS_NUM_BLOATED_RATIO > .1 or ADDONS_NUM_ENABLED > 15)
+end
 --
 local function ToggleMulticoreCpuTweaks()
 	-- CPU timing correcting tweak:
 	local timingNew = ((not CPU_IS_ASYNC and CPU_TIMING == 1) and 0) or ((CPU_IS_ASYNC and CPU_TIMING ~= 1) and 1) or nil 
 	if timingNew ~= nil then
 		CPU_NEW_TIMING = true
+		CPU_TIMING = timingNew
 		SetCVar("timingMethod", timingNew)
 	end
 	-- Auto-affinity tweak: Only for clients < 3.3.2 and multicore CPUs (except dualcores).
 	-- Current code targets (numCores - 1) for a number of reasons, but this may change in the future.
 	if CPU_NUM_THREADS > 2 and WOW < 30302 then
 		local advisedAffinity = CreateProcessAffinityMask(CPU_NUM_THREADS, true)
-		-- Check if user has a custom setting with less cores (possibly assigned by the client)
-		-- Do tweak if:
-		-- a) Client already doesn't have a user picked value of all cores
-		-- b) Client has default affinity range
-		if advisedAffinity ~= 0 and (CPU_AFFINITY <= 3 or CPU_AFFINITY < advisedAffinity) then
+		-- Only replace the old client defaults, leave custom user masks alone.
+		if advisedAffinity ~= 0 and CPU_AFFINITY <= 3 then
 			CPU_NEW_AFFINITY = true
+			CPU_AFFINITY = advisedAffinity
 			SetCVar("processAffinityMask", advisedAffinity)
 		end
 	end
 end
 --
 local function ToggleFrameRateLimit(loading)
-	if loading and (ADDONS_NUM_BLOATED_RATIO > .1 or ADDONS_NUM_ENABLED > 15) then
-		if DISPLAY_VSYNC and isfunc(RestartGx) then
-			SetCVar("gxVSync", (GetVSync() and 0) or 1)
+	if not ShouldBoostLoading() then return; end
+	if loading then
+		if DISPLAY_VSYNC then
+			if not isfunc(RestartGx) then return; end
+			if DISPLAY_TURTLE_SAFE_MODE then
+				DISPLAY_RESTART_SKIPPED = true
+				return
+			end
+			ToggleLoadingMaxFPS(true)
+			SetCVar("gxVSync", 0)
 			RestartGx()
-			SetMaxFPS()
-		elseif not DISPLAY_VSYNC then
-			SetMaxFPS()
+			DISPLAY_RESTART_PENDING = true
+			return RefreshDisplayState()
 		end
+		ToggleLoadingMaxFPS(true)
+		return RefreshDisplayState()
 	end
+	if DISPLAY_RESTART_PENDING then
+		SetCVar("gxVSync", 1)
+		RestartGx()
+		DISPLAY_RESTART_PENDING = false
+	end
+	ToggleLoadingMaxFPS(false)
+	return RefreshDisplayState()
 end
 --
 local function UpdateDisplayMode(toggle)
 	if isnum(toggle) then
 		if toggle > 0 then
-			return DISPLAY_RATES[DISPLAY_RATE] ~= nil and not DISPLAY_IBSYNC and SetMaxFPS(DISPLAY_RATE)
+			if DISPLAY_RATES[DISPLAY_RATE] ~= nil and not DISPLAY_IBSYNC then
+				SetCVar("ibMaxFPSRestore", GetMaxFPS())
+				return SetMaxFPS(DISPLAY_RATE)
+			end
+			return
 		end
-		return DISPLAY_IBSYNC and SetMaxFPS(0)
+		if DISPLAY_IBSYNC then
+			local restore = GetCVarNum("ibMaxFPSRestore")
+			return SetMaxFPS((restore ~= nil and restore) or 0)
+		end
+		return
 	end
 	local oldsync = DISPLAY_IBSYNC
-	DISPLAY_RESOLUTION = GetResolution()
-	DISPLAY_RATES = GetAvailableRefreshRates(DISPLAY_RESOLUTION, DISPLAY_RESOLUTIONS)
-	DISPLAY_RATE = GetRefreshRate()
-	DISPLAY_VSYNC = GetVSync()
-	DISPLAY_MAX_FPS = GetMaxFPS()
-	DISPLAY_MAX_FPS_BG = GetMaxFPSBG()
-	DISPLAY_IBSYNC = not DISPLAY_VSYNC and DISPLAY_RATES[DISPLAY_MAX_FPS] ~= nil
+	RefreshDisplayState()
 	if DISPLAY_IBSYNC and DISPLAY_MAX_FPS ~= DISPLAY_RATE then
 		SetMaxFPS((DISPLAY_RATES[DISPLAY_RATE] ~= nil and DISPLAY_RATE) or 0)
 		if DISPLAY_RATES[DISPLAY_RATE] == nil then print(format("Your display doesn't support %iHz mode, reverting IBSync...", DISPLAY_RATE)); end
 	end
 	return DISPLAY_IBSYNC ~= oldsync and print(format("ImpulseBooster Sync is now %s.", ((DISPLAY_IBSYNC and "enabled") or "disabled")))
 end
+--
+RefreshDisplayState()
 --
 local BOOSTER = CreateFrame("Frame")
 --
@@ -168,7 +230,7 @@ local function OnUpdate()
 	if GetVSync() ~= DISPLAY_VSYNC then return UpdateDisplayMode(); end
 	if GetResolution() ~= DISPLAY_RESOLUTION then return UpdateDisplayMode(); end
 	if GetRefreshRate() ~= DISPLAY_RATE then return UpdateDisplayMode(); end
-	if GetMaxFPS() ~= DISPLAY_MAX_FPS then return UpdateDisplayMode(); end
+	if GetEffectiveMaxFPS() ~= DISPLAY_MAX_FPS then return UpdateDisplayMode(); end
 	if GetMaxFPSBG() ~= DISPLAY_MAX_FPS_BG then return UpdateDisplayMode(); end
 end
 --
@@ -180,7 +242,10 @@ local function OnEvent()
 		ToggleFrameRateLimit(true)
 	elseif event == "PLAYER_LOGIN" then
 		TIME_LOADING_END = GetTime()
-		ToggleFrameRateLimit(true)
+		ToggleFrameRateLimit(false)
+		if DISPLAY_RESTART_SKIPPED then
+			print("Skipped early graphics restart on this Turtle-style client to avoid UI whiteout.")
+		end
 		if CPU_NEW_TIMING then
 			print("Detected incorrect forced timing method, applying the fix on the next restart...")
 		end
@@ -210,7 +275,7 @@ BOOSTER:SetScript("OnEvent", OnEvent)
 BOOSTER:SetScript("OnUpdate", (DISPLAY_FPS_LIMITER and OnUpdate) or nil)
 --
 do -- Inject Video Options
-	if not DISPLAY_FPS_LIMITER then SetCVar("maxFPS", nil); SetCVar("maxFPSBk", nil); return; end
+	if not DISPLAY_FPS_LIMITER then return; end
 	local optionsvideo = _G["OptionsFrameDisplay"]
 	local attachto = _G["OptionsFrameCheckButton14"] -- Hardware cursor checkbox for TBC clients
 	local checkboxvsync = _G["OptionsFrameCheckButton5"]
