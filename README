@@ -23,8 +23,9 @@ Cut features in 3.0:
 * Lua garbage collection suppression while loading/reloading UI. This feature was removed due to negligible effect and being potentially unsafe for taints. This feature can be reintroduced on demand.
 
 INSTALLATION:
-* Windows users: Download and unzip the addon folder into your client's "Interface\AddOns\" directory.
-* Linux (WINE) users: Use the same addon folder unless your client still requires a custom load-order workaround.
+* Turtle WoW Launcher / GitAddonsManager users: Install from https://github.com/Riqqqque/impulse-booster.git.
+* Manual users: Put these files in "Interface\AddOns\!!!ImpulseBooster\" for the original early load order.
+* If using a raw GitHub ZIP, make sure the folder name matches one of the included .toc files. "!!!ImpulseBooster" and "impulse-booster" are supported.
 
 IMPORTANT NOTES:
 
@@ -32,5 +33,8 @@ Its recommended for Linux users to use their respective dedicated edition, becau
 
 TURTLE WOW NOTES:
 * This package targets Turtle WoW's vanilla-style addon interface (11200).
+* The repository root contains addon files for git-based addon managers.
+* "impulse-booster.toc" supports launcher/git installs where the folder is named "impulse-booster".
+* "!!!ImpulseBooster.toc" supports manual installs that preserve the original early load order.
 * IBSync and the extra Video Options checkboxes only work on 2.2+ clients, so they are not active on Turtle.
 * Early graphics restart is skipped by default on Turtle-style clients to avoid white UI elements during loading. Legacy behavior can be restored with "/console ibAllowUnsafeRestart 1".

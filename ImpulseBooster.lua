@@ -26,6 +26,7 @@ do
 end
 -- Custom globals and API
 local WOW = tonumber((gsub(((GetBuildInfo and GetBuildInfo()) or "1.8.4"), "^([%d]+)%.([%d]+)%.([%d]+)$", function(mj,mn,hf) return (mj*10^4)+(mn*100)+hf; end)))
+local ADDON_ALIASES = { ["!!!ImpulseBooster"] = true, ["impulse-booster"] = true }
 local MAX_WOW_FRAMERATE = (WOW < 30000 and 1000) or 10000
 local lshift, bor, band, bnot = bit.lshift, bit.bor, bit.band, bit.bnot
 local GetTime = GetTime
@@ -235,7 +236,7 @@ local function OnUpdate()
 end
 --
 local function OnEvent()
-	if event == "ADDON_LOADED" and arg1 == "!!!ImpulseBooster" then
+	if event == "ADDON_LOADED" and ADDON_ALIASES[arg1] then
 		TIME_LOADING_START = GetTime()
 		BOOSTER:UnregisterEvent("ADDON_LOADED")
 		ToggleMulticoreCpuTweaks()
